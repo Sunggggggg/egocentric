@@ -6,7 +6,8 @@ import numpy as np
 import torch
 import torch.utils
 import torch.utils.data
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
+from torch.utils.data.distributed import DistributedSampler
 
 from .dataclass import TrainingData
 from lib.dataset.dataclass import collate_dataclass
@@ -160,7 +161,7 @@ class AmassHdf5Dataset(torch.utils.data.Dataset[TrainingData]):
         return self._approximated_length
     
 
-def get_loader(HDF5_PATH, FILE_LIST_PATH, SUBSEQ_LEN):
+def get_loader(HDF5_PATH, FILE_LIST_PATH, SUBSEQ_LEN, MUL_GPU=False):
     train_dataset = AmassHdf5Dataset(
         hdf5_path=HDF5_PATH,
         file_list_path=FILE_LIST_PATH, 
@@ -169,11 +170,13 @@ def get_loader(HDF5_PATH, FILE_LIST_PATH, SUBSEQ_LEN):
         cache_files=False,
         slice_strategy='random_uniform_len',
     )
+    sampler = DistributedSampler(train_dataset, shuffle=MUL_GPU) if MUL_GPU else RandomSampler(train_dataset)
     train_loader = DataLoader(
         dataset=train_dataset,
         batch_size=_C.TRAIN.batch_size,
         num_workers=4,
-        shuffle=True,
+        # shuffle=True,
+        sampler=sampler,
         collate_fn=collate_dataclass
     )
     
@@ -185,11 +188,13 @@ def get_loader(HDF5_PATH, FILE_LIST_PATH, SUBSEQ_LEN):
             cache_files=False,
             slice_strategy="deterministic",
     )
+    sampler = DistributedSampler(val_dataset, shuffle=MUL_GPU) if MUL_GPU else SequentialSampler(val_dataset)
     val_loader = DataLoader(
         dataset=val_dataset,
         batch_size=1,
         num_workers=4,
-        shuffle=False,
+        # shuffle=False,
+        sampler=sampler,
         collate_fn=collate_dataclass
     )
     

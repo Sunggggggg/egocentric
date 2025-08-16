@@ -82,8 +82,8 @@ class SingleJointMixerModule(nn.Module):
 class TokenGen(nn.Module):
     def __init__(self, 
                  in_channels=256, 
-                 out_channels=256,
                  token_num=160, 
+                 token_class_num=2048
                  ):
         super().__init__()
         hidden_dim = 64
@@ -98,7 +98,8 @@ class TokenGen(nn.Module):
         self.mixer_head = nn.ModuleList(
             [MixerLayer(hidden_dim, hidden_inter_dim,
                 token_num, token_inter_dim, dropout) for _ in range(num_blocks)])
-        self.mixer_norm_layer = FCBlock(hidden_dim, out_channels)
+        self.mixer_norm_layer = FCBlock(hidden_dim, hidden_dim)
+        self.class_pred_layer = nn.Linear(hidden_dim, token_class_num)
 
     def forward(self, x):
         """
@@ -111,5 +112,7 @@ class TokenGen(nn.Module):
         for mixer_layer in self.mixer_head:
             cls_feat = mixer_layer(cls_feat)
         cls_feat = self.mixer_norm_layer(cls_feat)
+        cls_logits = self.class_pred_layer(cls_feat) 
+        cls_logits_softmax = cls_logits.softmax(-1)
         
-        return cls_feat
+        return cls_logits_softmax

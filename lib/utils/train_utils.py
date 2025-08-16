@@ -3,10 +3,10 @@ import torch
 import torch.optim as optim
 from lib.data.transforms._so3 import SO3
 
-def get_device(data):
+def get_device(data, device='cuda:0'):
     for k, v in data.items() :
         if isinstance(v, torch.Tensor):
-            data[k] = v.cuda().float()
+            data[k] = v.to(device).float()
     return data
 
 def get_optimizer(model, lr=2e-4):
@@ -23,7 +23,10 @@ def reset_err_list(type='tr'):
                 f'{type}/curr_mesh_recons': 0.,
                 f'{type}/curr_jnt_recons': 0.,
                 f'{type}/curr_perplexity': 0.,
-                f'{type}/curr_commit': 0.}
+                f'{type}/curr_commit': 0.,
+                f'{type}/curr_root': 0.,
+                f'{type}/curr_contact': 0.,
+                f'{type}/curr_pa_jnt_recons': 0.,}
     if type == 'tr':
         err_list.update({
             f'{type}/curr_loss': 0.

@@ -1,4 +1,10 @@
+"""
+TokenHMR에서 했던 방식처럼
+token -> SA+CA -> tokenout -> decode
+"""
+
 import numpy as np
+from sympy import false
 import torch
 import torch.nn as nn
 from smplx import SMPLHLayer
@@ -19,14 +25,11 @@ class Model(nn.Module):
         super().__init__()
         # --------- SMPL --------- #
         self.body_model = SMPLHLayer(_C.SMPL.SMPLH_MODEL_PATH, gender='neutral', num_betas=10)
-        self.body_model.eval()
         
         # --------- T-pose --------- #
         mean_params = np.load(_C.SMPL.SMPL_MEAN_PARAM)
-        mean_pose = torch.from_numpy(mean_params['pose'].astype(np.float32))
-        mean_shape = torch.from_numpy(mean_params['shape'].astype('float32'))
-        # mean_pose = mean_pose[:132].reshape(1, 1, 132)
-        self.register_buffer('mean_pose', mean_pose)        # [1, 1, 132]
+        mean_pose = torch.from_numpy(mean_params['pose'].astype(np.float32)).reshape(1, 1, -1)
+        self.register_buffer('mean_pose', mean_pose)
         
         # --------- TempTokenHMR --------- #
         temptokenhmr_ckpt = 'exp/codebook/light_transformer/best_net.pth'
@@ -48,56 +51,49 @@ class Model(nn.Module):
         self.head_net = HeadNet(self.head_transformer_cfg)
         
         # --------- Decoding module --------- #
-        # self.decoder_cfg = asdict(TransformerConfig())
-        # self.transformer_decoder = TransformerDecoder(**self.decoder_cfg)
+        self.decoder_cfg = asdict(TransformerConfig())
+        self.transformer_decoder = TransformerDecoder(**self.decoder_cfg)
         
         self.token_gen = TokenGen(256, 160, 2048)
         self.orient_head = nn.Linear(256, 6)
         self.contact_head = nn.Linear(256, 21)
         
-    def forward(self, head_traj, betas=None):
+    def forward(self, head_traj):
         """ head_traj : [B, T, 9]
-            betas       :  [B, T, 10]
         """
         B, T = head_traj.shape[:2]
+        BT = B*T
         
         # ----------- Head net. ----------- # 
         head_feat = flatten(self.head_net(head_traj))   # [BT, 256]
-        mean_pose = self.mean_pose.expand(B*T, -1)      # [BT, 144]
-        
+        mean_pose = self.mean_pose.expand(B, T, -1)       # [B, T, 144]
+
         # ----------- Decoding ----------- # 
-        delta_root = self.orient_head(head_feat)        # [BT, 6]
-        pred_contact = self.contact_head(head_feat)
+        token = torch.zeros(BT, 1, 1).to(head_feat.device)
+
+        token_out = self.transformer_decoder(token, context=head_feat[:, None])
+        token_out = token_out.squeeze(1)                # [BT, 256]
         
-        cls_logits_softmax = self.token_gen(head_feat)
-        delta_pose = self.token_decoder(unflatten(cls_logits_softmax, B, T)) # [B, T, 126]
-        delta_pose = flatten(delta_pose)                # [BT, 126]
+        pred_orient = unflatten(self.orient_head(token_out), B, T)       # [B, T, 6]
+        pred_contact = unflatten(self.contact_head(token_out), B, T)     # [B, T, 21]
+        cls_logits_softmax = self.token_gen(token_out)                   # [BT, 160, 2048]
+        pred_body = self.token_decoder(unflatten(cls_logits_softmax, B, T)) # [B, T, 21*6]
         
-        init_root_6d = (delta_root + mean_pose[:, :6]).unsqueeze(1)          # [BT, 1, 6]
-        init_pose_6d = (delta_pose + mean_pose[:, 6:132]).reshape(-1, 21, 6) # [BT, 21, 6]
-        
-        init_body_6d = torch.cat((init_root_6d, init_pose_6d), dim=1)        # [BT, 22, 6]
-        init_body_mat = rotation_6d_to_matrix(init_body_6d)
+        pred_body_pose = torch.cat([pred_orient, pred_body], dim=-1) + mean_pose[..., :132]     # [BT, 132]
         
         # ----------- Post-processing ----------- #  
-        if betas is None :
-            smpl_output = self.body_model(
-                global_orient=init_body_mat[:, [0]],
-                body_pose=init_body_mat[:, 1:], 
-            )
-        else :
-            smpl_output = self.body_model(
-                global_orient=init_body_mat[:, [0]],
-                body_pose=init_body_mat[:, 1:], 
-                betas=flatten(betas)
-            )
+        pred_body_pose_rotmat = rotation_6d_to_matrix(pred_body_pose.reshape(-1, 22, 6))        # [BT, 22, 3, 3]
+        smpl_output = self.body_model(
+            global_orient=pred_body_pose_rotmat[:, [0]],
+            body_pose=pred_body_pose_rotmat[:, 1:], 
+        )
         
         output = {
             'pred_jnts': unflatten(smpl_output.joints, B, T),
             'pred_verts': unflatten(smpl_output.vertices, B, T),
-            'pred_pose': init_pose_6d.reshape(B, T, -1),
-            'global_orient': init_root_6d.reshape(B, T, 6),
-            'contact': pred_contact.reshape(B, T, -1),
+            'pred_pose': pred_body_pose[..., 6:].reshape(B, T, -1),
+            'global_orient': pred_body_pose[..., :6].reshape(B, T, 6),
+            'contact': pred_contact,
         }
         
         return output

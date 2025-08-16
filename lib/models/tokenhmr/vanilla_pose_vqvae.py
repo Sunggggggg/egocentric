@@ -1,3 +1,4 @@
+import os
 import re
 import torch
 import numpy as np
@@ -11,15 +12,14 @@ from .quantize_cnn import QuantizeEMAReset
 from .rotation_utils import matrix_to_rotation_6d, rotation_6d_to_matrix, matrix_to_axis_angle
 from smplx import SMPLHLayer, SMPLXLayer
 
-
-import os
 smpl_type = 'smplh'
 body_model_path = _C.SMPL.SMPLH_MODEL_PATH
 body_model_folder = os.path.dirname(body_model_path)
 
 body_model = eval(f'{smpl_type.upper()}Layer')(model_path=body_model_folder,num_betas=10,ext='pkl')
-body_model = body_model.cuda() if torch.cuda.is_available() else body_model
+body_model = body_model.cpu() if torch.cuda.is_available() else body_model
 print(f"✅ Successfully loaded body model from: {body_model_path}")
+body_model.eval()
 
 def step_multiplier_mapping():
     return {
@@ -131,6 +131,7 @@ class PoseSPDecoderV1(nn.Module):
                  out_postprocess = True):   #
         super(PoseSPDecoderV1, self).__init__()
 
+
         decoder_layers = []
         self.rot_type = rot_type
         self.num_joints = num_joints
@@ -183,7 +184,7 @@ class PoseSPDecoderV1(nn.Module):
             'pred_pose_body_6d': pred_pose_6d,
             'pred_pose_body_rotmat': pred_pose_rotmat,
         })
-        
+
         if self.mesh_inference:
             pred_pose_aa = matrix_to_axis_angle(pred_pose_rotmat.view(-1, 3, 3)).view(batch_size, 3*self.num_joints)
             pred_body_mesh = body_model(body_pose=pred_pose_rotmat)

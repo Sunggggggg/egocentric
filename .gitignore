@@ -1,3 +1,5 @@
+__pycache__/
+
 *.txt
 *.pyc
 
@@ -9,3 +11,8 @@ events*
 *.npz
 *.pkl
 *.hdf5
+*.jpg
+*.png
+
+# config
+configs/constant.py

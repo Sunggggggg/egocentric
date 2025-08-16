@@ -13,6 +13,7 @@ class LossConfig:
     POSE_LOSS_WT = 20.0
     JNT_LOSS_WT = 100.0
     MESH_LOSS_WT = 100.0
+    CONTACT_LOSS_WT = 20.0
     COMMIT_LOSS_WT = 1.0
     LOSS_WT = 1.0
     VALID = True
