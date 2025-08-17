@@ -16,6 +16,7 @@ import configs.constant as _C
 from lib.models import load_egotokenhmr
 from lib.dataset.egocentric_dataloader import AmassHdf5Dataset
 from lib.dataset.dataclass import collate_dataclass, TrainingData
+from lib.utils.train_utils import get_device, make_input
 from lib.utils.rotation_utils import quaternion_to_axis_angle
 from lib.utils.eval_utils import compute_similarity_transform
 
@@ -50,16 +51,11 @@ class Evaluator:
 
     def __call__(self, output: Dict[str, torch.Tensor], gt: TrainingData):
         
-        if output['final_keypoints_3d'] is None or gt.joints_wrt_world is None:
-            print("Skipping metric calculation due to missing joint data.")
-            return
-        
         B, T = gt.betas.shape[:2]
         eval_world = False
         if eval_world:
             # Pred -------------------------------------------------------------------------------------------------------------------------------
-            pred_keypoints_3d = output['final_keypoints_3d']
-            
+            pred_keypoints_3d = output['pred_jnts']
             
             pred_verts_flat = output['final_vertices']
             right_eye_pred = (pred_verts_flat[:, 6260, :] + pred_verts_flat[:, 6262, :]) / 2.0
@@ -80,9 +76,11 @@ class Evaluator:
             gt_joints_3d_aligned = gt.joints_wrt_world.reshape(B*T, 21, 3)
             # ------------------------------------------------------------------------------------------------------------------------------------
         else:
-            pred_joints_3d_aligned = (output['final_keypoints_3d'] - output['final_keypoints_3d'][:, [0], :])[:, 1:, :]
+            pred_joints_3d = output['pred_jnts']        # [B, T, 22, 3]
+            pred_joints_3d = pred_joints_3d.reshape(B*T, 22, 3)
+            
+            pred_joints_3d_aligned = (pred_joints_3d - pred_joints_3d[:, [0], :])[:, 1:, :]
             gt_joints_3d_aligned = gt.joints_wrt_world.reshape(B*T, 21, 3) - gt.T_world_root[..., 4:].reshape(B*T, 3).unsqueeze(1)
-        
         
         pred_joints_3d_np = pred_joints_3d_aligned.detach().cpu().numpy()  # [B*T, J, 3]
         gt_joints_for_eval_np = gt_joints_3d_aligned.detach().cpu().numpy() # [B*T, J, 3]
@@ -110,12 +108,11 @@ class Evaluator:
         total_mpjpe, total_pampjpe = 0., 0.
         B, T = batch_data.betas.shape[:2]
         
-        pred_joints_3d_aligned = (output['final_keypoints_3d'].reshape(B, T, 22, 3)[0, ...] - output['final_keypoints_3d'].reshape(B, T, 22, 3)[0, :, [0], :])[:, 1:, :]
+        pred_joints_3d_aligned = (output['pred_jnts'].reshape(B, T, 22, 3)[0, ...] - output['pred_jnts'].reshape(B, T, 22, 3)[0, :, [0], :])[:, 1:, :]
         gt_joints_3d_aligned = batch_data.joints_wrt_world[0, ...].squeeze() - batch_data.T_world_root[0, :, 4:].unsqueeze(1)
         
         pred_joints_3d_np = pred_joints_3d_aligned.detach().cpu().numpy()  # [B*T, J, 3]
         gt_joints_for_eval_np = gt_joints_3d_aligned.detach().cpu().numpy() # [B*T, J, 3]
-
         
         mpjpe_batch = np.linalg.norm(pred_joints_3d_np - gt_joints_for_eval_np, axis=-1).mean(axis=-1) * 1000
         total_mpjpe += mpjpe_batch.sum()
@@ -128,8 +125,6 @@ class Evaluator:
 
         mpjpe_value = total_mpjpe / T
         pampjpe_value = total_pampjpe / T
-        
-
 
         with open(file_path, 'a', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
@@ -334,7 +329,7 @@ def save_obj(filepath: str, vertices: np.ndarray, faces: np.ndarray):
             f.write(f'f {face[0] + 1} {face[1] + 1} {face[2] + 1}\n')
             
 
-def run_eval(model: torch.nn.Module, model_cfg: Any, device: torch.device, args: argparse.Namespace):
+def run_eval(model: torch.nn.Module, device: torch.device, args: argparse.Namespace):
     smpl = SMPLH(_C.SMPL.SMPLH_MODEL_PATH).to(device=device)
     
     HDF5_PATH = Path(_C.DATA.HDF5_PATH)
@@ -372,22 +367,19 @@ def run_eval(model: torch.nn.Module, model_cfg: Any, device: torch.device, args:
     with torch.no_grad():
         for i, batch_data in enumerate(pbar):
             batch_data = move_dataclass_to_device(batch_data, device)
-
-            try:
-                out = model(batch_data)
-            except RuntimeError as e:
-                print(f"RuntimeError during model forward pass for batch {i}: {e}")
-                raise e
-
-            evaluator(out, batch_data)
+            batch = {k: v for k, v in batch_data.__dict__.items()}
+            batch = get_device(batch)
+            
+            # ----------- Model forward ----------- #
+            betas = batch['betas'][..., :10]            # [B, T, 10]
+            head_pose = make_input(batch)
+            output = model(head_pose, betas)
+            
+            evaluator(output, batch_data)
             total_iters_done = i + 1
-
-            if total_iters_done:
-                evaluator.log()
-                evaluator.record_mpjpe_to_csv(None, batch_data, out, total_iters_done)
-                render_predictions(args, args.current_dataset, batch_data, out, smpl, mesh_renderer, mesh_renderer_henu, total_iters_done)
-
-    evaluator.log()
+            
+            evaluator.log()
+            
     error = None
     metrics_dict = evaluator.get_metrics_dict()
     save_eval_result(args.results_file, metrics_dict, args.checkpoint, args.current_dataset, error=error, iters_done=total_iters_done, exp_name=args.exp_name)
@@ -422,7 +414,7 @@ def main():
     # Meta data
     parser.add_argument('--exp_name', type=str, default=None)
     parser.add_argument('--results_file', type=str, default='eval_regression.csv')
-    parser.add_argument('--checkpoint', type=str, default='exp/egohmr/only_headnet/030000_net.pth')
+    parser.add_argument('--checkpoint', type=str, default='exp/egohmr/only_headnet/060000_net.pth')
     parser.add_argument('--dataset', type=str, default='AMASS_TEST') 
     
     # Dataloader
@@ -433,7 +425,6 @@ def main():
     parser.add_argument('--dataset_dir', type=str, default='')
     parser.add_argument('--num_samples', type=int, default=0)
     parser.add_argument('--log_freq', type=int, default=10)
-    
     
     parser.add_argument('--render', action='store_true')
     args = parser.parse_args()
@@ -447,7 +438,7 @@ def main():
     args.render_dir = render_dir
     args.results_file = os.path.join(results_dir, args.results_file)
 
-    model = load_egotokenhmr(checkpoint_path=args.checkpoint)
+    model = load_egotokenhmr(ckpt_path=args.checkpoint)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
     model = model.to(device)
     model.eval()
