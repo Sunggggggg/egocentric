@@ -278,7 +278,7 @@ class Renderer():
             shininess=0
         )
         
-        results = self.renderer(mesh, cameras=cameras, lights=lights, materials=materials)
+        results = self.renderer(mesh, cameras=cameras, lights=self.lights, materials=materials)
         image = (results[0, ..., :3].detach().cpu().numpy() * 255).astype(np.uint8)
             
         return image

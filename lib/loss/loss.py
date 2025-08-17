@@ -44,7 +44,7 @@ class MaxMixturePrior(nn.Module):
         self.register_buffer('precisions',torch.tensor(precisions, dtype=dtype))
 
         # The constant term:
-        sqrdets = np.array([(np.sqrt(np.linalg.det(c)))
+        sqrdets = np.array([(np.sqrt(np.linalg.det(c) + epsilon))
                             for c in gmm['covars']])
         const = (2 * np.pi)**(69 / 2.)
 

@@ -134,12 +134,13 @@ def eval_pose_hmr(val_loader, net, device, writer, nb_iter, out_dir, best_scores
         
         head_pose = make_input(batch)                           # [B, T, 9]
         output = net(head_pose)
-        pred_jnts = output['pred_jnts'][:, :, :21].detach().cpu().numpy()       # [B, T, 21, 3]
-        gt_jnts = batch['joints_wrt_world'].detach().cpu().numpy()              # [B, T, J, 3]
+        pred_jnts = output['pred_jnts'][:, :, :22].detach().cpu().numpy()       # [B, T, 22, 3]
+        pred_jnts = (pred_jnts - pred_jnts[:, :, [0]])[:, :, 1:]                # [B, T, 21, 3]
         
-        pred_jnts = pred_jnts - pred_jnts[..., [0], :]
-        gt_jnts = gt_jnts - gt_jnts[..., [0], :]
-        
+        gt_jnts = batch['joints_wrt_world']              # [B, T, 21, 3]
+        gt_transl = batch['T_world_root'][..., 4:]       # [B, T, 3]
+        gt_jnts = (gt_jnts - gt_transl.unsqueeze(-2)).detach().cpu().numpy()
+    
         pred_jnts = pred_jnts.reshape(-1, 21, 3)
         gt_jnts = gt_jnts.reshape(-1, 21, 3)
         

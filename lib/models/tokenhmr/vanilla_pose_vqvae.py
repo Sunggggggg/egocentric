@@ -17,7 +17,7 @@ body_model_path = _C.SMPL.SMPLH_MODEL_PATH
 body_model_folder = os.path.dirname(body_model_path)
 
 body_model = eval(f'{smpl_type.upper()}Layer')(model_path=body_model_folder,num_betas=10,ext='pkl')
-body_model = body_model.cpu() if torch.cuda.is_available() else body_model
+body_model = body_model.cuda() if torch.cuda.is_available() else body_model
 print(f"✅ Successfully loaded body model from: {body_model_path}")
 body_model.eval()
 
