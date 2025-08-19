@@ -101,7 +101,7 @@ class TokenGen(nn.Module):
         self.mixer_norm_layer = FCBlock(hidden_dim, hidden_dim)
         self.class_pred_layer = nn.Linear(hidden_dim, token_class_num)
 
-    def forward(self, x):
+    def forward(self, x, apply_softmax=True):
         """
         x : [BT, 256]
         """
@@ -113,6 +113,46 @@ class TokenGen(nn.Module):
             cls_feat = mixer_layer(cls_feat)
         cls_feat = self.mixer_norm_layer(cls_feat)
         cls_logits = self.class_pred_layer(cls_feat) 
-        cls_logits_softmax = cls_logits.softmax(-1)
+        if apply_softmax :
+            cls_logits_softmax = cls_logits.softmax(-1)
+            return cls_logits_softmax
+        else :
+            return cls_logits
         
-        return cls_logits_softmax
+class Joint2Token(nn.Module):
+    def __init__(self, in_channels=256, 
+                 token_num=160, 
+                 token_class_num=2048):
+        super().__init__()
+        hidden_dim = 64
+        hidden_inter_dim = 256
+        token_inter_dim = 64
+        dropout = 0.1
+        num_blocks = 4
+        num_joints = 22
+        
+        self.mixer_trans1 = FCBlock(num_joints, token_num)
+        self.mixer_trans2 = FCBlock(in_channels, hidden_dim)
+        self.mixer_head = nn.ModuleList(
+            [MixerLayer(hidden_dim, hidden_inter_dim,
+                token_num, token_inter_dim, dropout) for _ in range(num_blocks)])
+        self.mixer_norm_layer = FCBlock(hidden_dim, hidden_dim)
+        self.class_pred_layer = nn.Linear(hidden_dim, token_class_num)
+        
+        
+    def forward(self, x, apply_softmax=True):
+        """
+        x : [BT, 22, 256]
+        """
+        cls_feat = self.mixer_trans1(x.permute(0, 2, 1)).permute(0, 2, 1)    # [BT, 160, 256]
+        cls_feat = self.mixer_trans2(cls_feat)  # [BT, 160, 64]
+        
+        for mixer_layer in self.mixer_head:
+            cls_feat = mixer_layer(cls_feat)
+        cls_feat = self.mixer_norm_layer(cls_feat)
+        cls_logits = self.class_pred_layer(cls_feat) 
+        if apply_softmax :
+            cls_logits_softmax = cls_logits.softmax(-1)
+            return cls_logits_softmax
+        else :
+            return cls_logits
